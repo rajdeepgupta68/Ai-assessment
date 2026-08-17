@@ -90,8 +90,8 @@ The strategy is selected by name from a registry
 ## Running the demo
 
 ```
-git clone https://github.com/<you>/sanitisation-agent
-cd sanitisation-agent
+git clone https://github.com/rajdeepgupta68/Ai-assessment.git
+cd Ai-assessment
 python run_demo.py
 ```
 

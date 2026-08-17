@@ -1,19 +1,8 @@
-"""
-Safe readers for untrusted document sources.
+"""Safe readers for untrusted document sources.
 
-Three concrete readers are provided:
-
-  - CsvReader   : standard csv module, but values are coerced to strings
-                  and never executed.
-  - JsonReader  : json.loads with strict parsing; rejects non-object roots.
-  - HtmlTableReader : BeautifulSoup over <table> rows. If bs4 isn't
-                  available we fall back to a regex-based extractor so the
-                  demo runs offline.
-
-Every reader returns a list of dicts tagged with a SourceRecord so the
-orchestrator can later attribute fields and decisions back to the file
-they came from. NO field value is ever passed to eval/exec; nothing in
-this module invokes a shell.
+Every reader returns SourceRecord dataclasses. Nothing in this module is
+ever passed to eval/exec and no shell is invoked - cell values are
+treated as bytes, parsed into dicts, and handed to the next layer.
 """
 
 from __future__ import annotations
@@ -29,18 +18,13 @@ from typing import Any
 
 @dataclass
 class SourceRecord:
-    source_id: str   # human-readable label for the source, e.g. "export.csv"
-    row_index: int   # 0-based row inside the source
+    source_id: str
+    row_index: int
     data: dict[str, Any]
-    raw_size: int    # size of original cell string for logging
+    raw_size: int
 
-
-# ---- CSV -------------------------------------------------------------------
 
 class CsvReader:
-    """Parses CSV safely. We always treat the header row as labels, not data.
-    Quoted fields with newlines are handled by the stdlib csv module."""
-
     def __init__(self, source_id: str):
         self.source_id = source_id
 
@@ -54,7 +38,6 @@ class CsvReader:
         records: list[SourceRecord] = []
         for i, row in enumerate(reader):
             cleaned = {k: (v if v is not None else "") for k, v in row.items()}
-            # Empty header rows can produce None keys; drop them.
             cleaned = {k: v for k, v in cleaned.items() if k}
             records.append(SourceRecord(
                 source_id=self.source_id,
@@ -65,12 +48,7 @@ class CsvReader:
         return records
 
 
-# ---- JSON ------------------------------------------------------------------
-
 class JsonReader:
-    """Reads JSON. The top-level must be a list of objects; any other shape
-    is rejected with a clear error so the orchestrator can log it."""
-
     def __init__(self, source_id: str):
         self.source_id = source_id
 
@@ -89,7 +67,6 @@ class JsonReader:
                 raise ValueError(
                     f"{self.source_id}[{i}]: each JSON record must be an object"
                 )
-            # Coerce all values to strings for uniform downstream handling.
             cleaned = {str(k): ("" if v is None else v) for k, v in item.items()}
             records.append(SourceRecord(
                 source_id=self.source_id,
@@ -100,8 +77,6 @@ class JsonReader:
         return records
 
 
-# ---- HTML TABLE ------------------------------------------------------------
-
 _TR_ROW = re.compile(r"<tr\b[^>]*>(.*?)</tr>", re.IGNORECASE | re.DOTALL)
 _TR_CELL = re.compile(r"<t[hd]\b[^>]*>(.*?)</t[hd]>", re.IGNORECASE | re.DOTALL)
 _TAG = re.compile(r"<[^>]+>")
@@ -109,7 +84,6 @@ _WS = re.compile(r"\s+")
 
 
 def _strip(html_fragment: str) -> str:
-    # Strip tags, decode common entities, collapse whitespace.
     text = _TAG.sub(" ", html_fragment)
     text = (text.replace("&nbsp;", " ")
                 .replace("&amp;", "&")
@@ -121,8 +95,8 @@ def _strip(html_fragment: str) -> str:
 
 
 class HtmlTableReader:
-    """Parses the first <table> on the page into records. Uses BeautifulSoup
-    if it's available; otherwise falls back to a regex extractor."""
+    """First <table> on the page -> records. BeautifulSoup if installed,
+    regex otherwise so the demo runs offline."""
 
     def __init__(self, source_id: str):
         self.source_id = source_id

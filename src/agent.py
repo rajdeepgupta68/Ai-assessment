@@ -1,26 +1,12 @@
-"""
-Agent orchestrator.
+"""Agent orchestrator.
 
-This is the only file that "thinks" - it composes the readers, the
-injection detector, and the reconciliation engine. Every step is logged
-to an append-only audit log so we can later answer "what happened to
-record X?".
+Composes the readers, the injection detector, and the reconciliation
+engine. Every step is logged to an append-only audit log.
 
-Workflow:
-  1. Plan:  decide sources, schema, trust weights, strategy.
-  2. Fetch: read each source with the matching reader.
-  3. Validate: run every record through InjectionDetector.
-  4. Reconcile: join accepted records on the schema key_field, resolve
-     conflicts via the chosen strategy.
-  5. Store: write the clean dataset as JSON + a human-readable CSV.
-
-Hardening notes:
-  - The agent's behaviour comes from THIS file, not from any data field.
-    No fetched string is ever passed to eval/exec/shell.
-  - The detector's verdict strings describe WHY a record was rejected;
-    we log them verbatim so the rejection is auditable.
-  - The reconciliation strategy is selected from the strategy table by
-    name; it's never branched on a field's content.
+The agent's own behaviour is driven by this file - never by any data
+value. No fetched string is ever passed to eval/exec/shell. The detector
+returns reasons that get logged verbatim; nothing in those reasons is
+treated as an instruction.
 """
 
 from __future__ import annotations
@@ -52,16 +38,12 @@ from .source_readers import (
 )
 
 
-# -- Audit log ---------------------------------------------------------------
-
 class AuditLog:
-    """Append-only structured event log. Each event is a dict written as
-    one JSON line. The log is the canonical record of the agent's work."""
+    """Append-only JSONL event log."""
 
     def __init__(self, path: Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        # Truncate at start so a fresh run is self-contained.
         self.path.write_text("", encoding="utf-8")
 
     def write(self, event_type: str, **fields: Any) -> None:
@@ -77,8 +59,6 @@ class AuditLog:
             encoding="utf-8").splitlines() if line]
 
 
-# -- Orchestrator ------------------------------------------------------------
-
 READERS: dict[str, Callable[[str], Any]] = {
     "csv": lambda sid: CsvReader(sid),
     "json": lambda sid: JsonReader(sid),
@@ -87,8 +67,6 @@ READERS: dict[str, Callable[[str], Any]] = {
 
 
 class SanitisationAgent:
-    """Top-level orchestrator. One instance per run."""
-
     def __init__(
         self,
         schema: Schema,
@@ -99,8 +77,6 @@ class SanitisationAgent:
         """
         sources: list of (source_id, kind, trust, observed_at).
             kind is one of "csv" | "json" | "html".
-            trust is the per-source weight used by the reconciler.
-            observed_at is an ISO date string.
         """
         self.schema = schema
         self.strategy = strategy
@@ -111,8 +87,6 @@ class SanitisationAgent:
             key_field=schema.key_field,
             strategy=strategy,
         )
-
-    # ---- The five workflow steps --------------------------------------
 
     def run(self, source_paths: dict[str, Path]) -> dict[str, Any]:
         self._step_plan()
@@ -135,8 +109,6 @@ class SanitisationAgent:
         self.log.write("summary", **summary)
         return summary
 
-    # ---- Step 1 -------------------------------------------------------
-
     def _step_plan(self) -> None:
         self.log.write(
             "plan",
@@ -151,13 +123,10 @@ class SanitisationAgent:
                 "feed cannot be outvoted by two clean sources."
             ),
             sources=[
-                {"id": sid, "kind": kind, "trust": trust,
-                 "observed_at": obs}
+                {"id": sid, "kind": kind, "trust": trust, "observed_at": obs}
                 for sid, kind, trust, obs in self.sources_cfg
             ],
         )
-
-    # ---- Step 2 -------------------------------------------------------
 
     def _step_fetch(self, paths: dict[str, Path]) -> tuple[
             dict[str, list[SourceRecord]], dict[str, SourceMeta]]:
@@ -183,8 +152,6 @@ class SanitisationAgent:
             )
         return records, metas
 
-    # ---- Step 3 -------------------------------------------------------
-
     def _step_validate(
         self,
         records: dict[str, list[SourceRecord]],
@@ -205,10 +172,6 @@ class SanitisationAgent:
                         layer=verdict.layer,
                         reasons=verdict.reasons,
                         snippet=verdict.payload_snippet,
-                        # IMPORTANT: never log the full rejected field as a
-                        # "command to execute". We log only the reason and a
-                        # short snippet so an analyst can verify what was
-                        # blocked, and the agent itself never acts on it.
                         record_id=rec.data.get(self.schema.key_field, ""),
                     )
             accepted[source_id] = bucket
@@ -219,8 +182,6 @@ class SanitisationAgent:
                 rejected=len(recs) - len(bucket),
             )
         return accepted
-
-    # ---- Step 4 -------------------------------------------------------
 
     def _step_reconcile(
         self,
@@ -247,8 +208,6 @@ class SanitisationAgent:
             )
         return reconciled, conflicts
 
-    # ---- Step 5 -------------------------------------------------------
-
     def _step_store(
         self,
         reconciled: list[ReconciledRecord],
@@ -259,7 +218,6 @@ class SanitisationAgent:
         json_path = out_dir / "clean.json"
         csv_path = out_dir / "clean.csv"
 
-        # JSON: full provenance + values.
         with json_path.open("w", encoding="utf-8") as f:
             json.dump(
                 [
@@ -277,7 +235,6 @@ class SanitisationAgent:
                 ensure_ascii=False,
             )
 
-        # CSV: flat, easy to eyeball.
         if reconciled:
             fields = list(reconciled[0].values.keys())
             with csv_path.open("w", encoding="utf-8", newline="") as f:
