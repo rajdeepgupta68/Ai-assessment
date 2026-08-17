@@ -1,0 +1,6 @@
+# No required dependencies. The agent uses only the Python 3.11 standard
+# library (csv, json, re, dataclasses, datetime, html.parser via
+# stdlib fallback). BeautifulSoup is optional - the HTML reader will
+# use it if installed, otherwise it falls back to a regex extractor.
+#
+# beautifulsoup4>=4.12   # optional, for nicer HTML parsing
